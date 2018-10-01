@@ -1,0 +1,48 @@
+import com.digitalcloud.cashloan.plugin.task.QiNiuUploadTask
+
+/**
+ * 为市场推广同事做的Jenkins动态构建渠道包
+ * - Jenkins中输入渠道信息
+ * - 动态构建指定渠道包并上传到七牛云
+ * - 不支持加固（一定要注意），如果实在有加固的需求，以后有时间再做
+ * @author Ray
+ */
+
+String getCommandLineChannel() {
+    if (project.hasProperty("marketChannel")) {
+        return project.marketChannel
+    }
+    return null
+}
+
+/**
+ * 根据命令行传入的渠道信息，动态构建渠道包并上传到七牛云
+ */
+task buildMarketChannelApk(type: Exec) {
+    doFirst {
+        def channel = getCommandLineChannel()
+        println "校验渠道信息.  输入的渠道信息为：{${channel}}===================>>>>"
+        if (channel == null || channel.length() == 0) throw new GradleException("请传入正确的渠道信息，以英文逗号分隔")
+    }
+    group = "Ray"
+    description = "根据命令行传入的渠道信息，动态构建渠道包"
+
+    workingDir "${rootProject.projectDir}"
+    commandLine 'gradlew', '-Dorg.gradle.jvmargs=-Xmx1560m', '-Dfile.encoding=UTF-8', "-Pchannels=${getCommandLineChannel()}", 'channelBaseRelease'
+    doLast {
+        println "渠道包已构建完毕.  输入的渠道信息为：{${getCommandLineChannel()}}===================>>>>"
+    }
+}
+
+/**
+ * 构建完成之后自动上传到七牛云，用于Jenkins构建
+ */
+task uploadMarketChannelApkToQiniu(type: QiNiuUploadTask, dependsOn: 'buildMarketChannelApk') {
+    group = "Ray"
+    description = "构建完自动上传市场渠道包到七牛云"
+    bucketName "cashloan-channel-promotion"
+    fileDir "${project.buildDir}/channelRoot/test/base/release"
+    doLast {
+        println "渠道包已成功上传至七牛云{cashloan-channel-promotion}文件夹下.  ===================>>>>"
+    }
+}

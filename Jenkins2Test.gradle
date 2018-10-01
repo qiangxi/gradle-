@@ -1,0 +1,100 @@
+import com.digitalcloud.cashloan.plugin.task.QiNiuUploadTask
+
+/**
+ * 用于自己的日常测试
+ * - 可以切换主机环境、白骑士环境、v1/v2 接口
+ * - 不支持加固（因为日常测试没有加固的需求）
+ * 测试包输出路径：
+ * - buildDir
+ *   - channelRoot
+ *      - test：存储临时的测试包，用于日常测试......
+ * @author Ray
+ */
+
+String getReleaseTestApkPath() {
+    return "${project.buildDir}/channelRoot/test/base/release/xiaoedai_guanwang.apk"
+}
+
+String getDebugTestApkPath() {
+    return "${project.buildDir}/channelRoot/test/base/debug/xiaoedai_guanwang.apk"
+}
+
+/**
+ * 构建Release测试包，默认为guanwang渠道，
+ * 输出路径为project.buildDir/channelRoot/test/base/release/xiaoedai_guanwang.apk
+ * 千万不要使用project.buildDir/outputs/apk/base/release/xiaoedai_base.apk，该目录下的apk是没有渠道信息
+ */
+task buildReleaseTestApk(type: Exec) {
+    group = "Ray"
+    description = "构建Release测试包，默认为guanwang渠道"
+    workingDir "${rootProject.projectDir}"
+    commandLine 'gradlew', '-Pchannels=guanwang', '-Pdebug=true', '-PbqsDebug=true', 'channelBaseRelease'
+    doLast {
+        println "测试包已构建完毕.  ===================>>>>"
+    }
+}
+
+/**
+ * 构建Debug测试包，默认为guanwang渠道，
+ * 输出路径为project.buildDir/channelRoot/test/base/debug/xiaoedai_guanwang.apk
+ * 千万不要使用project.buildDir/outputs/apk/base/debug/xiaoedai_base.apk，该目录下的apk是没有渠道信息
+ */
+task buildDebugTestApk(type: Exec) {
+    group = "Ray"
+    description = "构建Debug测试包，默认为guanwang渠道"
+    workingDir "${rootProject.projectDir}"
+    commandLine 'gradlew', '-Pchannels=guanwang', '-Pdebug=true', '-PbqsDebug=true', 'channelBaseDebug'
+    doLast {
+        println "测试包已构建完毕.  ===================>>>>"
+    }
+}
+
+/**
+ * 构建完自动安装测试包，必须事先确保有且只有一台设备正常连接，后续考虑使用shell脚本自动判断设备连接状态
+ */
+task installReleaseTestApk(type: Exec, dependsOn: 'buildReleaseTestApk') {
+    group = "Ray"
+    description = "构建完自动安装测试包，必须事先确保有且只有一台设备正常连接"
+    commandLine 'adb', 'install', '-r', '-d', getReleaseTestApkPath()
+}
+
+/**
+ * 构建完自动安装测试包，必须事先确保有且只有一台设备正常连接，后续考虑使用shell脚本自动判断设备连接状态
+ */
+task installDebugTestApk(type: Exec, dependsOn: 'buildDebugTestApk') {
+    group = "Ray"
+    description = "构建完自动安装测试包，必须事先确保有且只有一台设备正常连接"
+    commandLine 'adb', 'install', '-r', '-d', getDebugTestApkPath()
+}
+
+/**
+ * 构建Release测试包，默认为guanwang渠道，白骑士环境由命令行传入，该task用于Jenkins构建
+ * 输出路径为project.buildDir/channelRoot/test/base/release/xiaoedai_guanwang.apk
+ * 千万不要使用project.buildDir/outputs/apk/base/release/xiaoedai_base.apk，该目录下的apk是没有渠道信息
+ */
+task buildReleaseTestApkWithParams(type: Exec) {
+    group = "Ray"
+    description = "构建Release测试包，默认为guanwang渠道，白骑士环境由命令行传入，该task用于Jenkins构建"
+
+    def bqsDebug = project.hasProperty("bqsDebug") ? project.bqsDebug : true
+
+    workingDir "${rootProject.projectDir}"
+    commandLine 'gradlew', '-Dorg.gradle.jvmargs=-Xmx1560m', '-Dfile.encoding=UTF-8', '-Pchannels=guanwang', '-Pdebug=true', "-PbqsDebug=${bqsDebug}", 'channelBaseRelease'
+    doLast {
+        println "测试包已构建完毕.  ===================>>>>"
+    }
+}
+
+/**
+ * 构建完成之后自动上传到七牛云，用于Jenkins构建
+ */
+task uploadTestApkToQiniu(type: QiNiuUploadTask, dependsOn: 'buildReleaseTestApkWithParams') {
+    group = "Ray"
+    description = "构建完自动上传测试包到七牛云"
+    bucketName "cashloan-test-apk"
+    fileDir "${project.buildDir}/channelRoot/test/base/release"
+    doLast {
+        println "测试包已上传至七牛.  ===================>>>>"
+    }
+}
+

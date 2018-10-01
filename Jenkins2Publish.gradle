@@ -1,0 +1,273 @@
+import com.leon.plugin.extension.RebuildChannelConfigurationExtension
+import com.leon.plugin.task.RebuildApkChannelPackageTask
+import com.digitalcloud.cashloan.plugin.task.QiNiuUploadTask
+
+/**
+ * 用于发布版本时使用，由原来的gradle构建渠道包改为vasDolly构建渠道包，打渠道包的速度得到极大提升
+ * - 只构建master分支
+ * - 支持加固包，定制包
+ * - 统一加入渠道信息
+ * - 上传到七牛
+ * @author Ray
+ */
+
+/**
+ * 创建文件夹，文件夹结构：
+ * - channelRoot
+ *      - 360Dir：存放360的定制包，和一份渠道列表，需要加固和构建渠道包，输出到channelDir
+ *      - yingyongbaoDir：存放应用宝的包和一份渠道列表，需要加固和构建渠道包，输出到channelDir
+ *      - channelDir：存放所有渠道包，用于上传到7牛
+ *      - test：存储临时的测试包，用于日常测试......
+ * 创建渠道列表文件
+ * baseApk的名称：xiaoedai_base.apk
+ */
+
+
+static String getBacketName() {
+    return "cashloan-apk"
+//    return "cashloan-test-apk"
+}
+
+static String getBaseApkName() {
+    return "xiaoedai_base.apk"
+}
+
+/**
+ * 获取加固后的apk名称
+ */
+String getJiaGuApkName() {
+    def versionName = rootProject.ext.VERSION_NAME
+    def version = versionName.replace(".", "")
+    return "xiaoedai_base_${version}_jiagu_sign.apk"
+}
+
+/**
+ * 创建渠道文件
+ */
+static void writeChannelFile(String filePath, String content) {
+    def channelFile = new File(filePath, "channelFile.txt")
+    if (channelFile.exists()) channelFile.delete()
+    channelFile.createNewFile()
+    channelFile.setText(content, "utf-8")
+}
+
+/**
+ * 重命名apk文件名
+ */
+static void renameApkName(String filePath, String fileName) {
+    File src = new File(filePath, fileName)
+    File dest = new File(filePath, getBaseApkName())
+    src.renameTo(dest)
+}
+
+/**
+ * 校验apk文件有效性
+ */
+static boolean verifyApkValid(String filePath) {
+    File apk = new File(filePath)
+    return apk.isFile()
+}
+
+/**
+ * 删除文件夹及包含的所有文件和文件夹
+ */
+task cleanChannelRootDir(type: Delete) {
+    group = "Ray"
+    description = "删除channelRoot文件夹及包含的所有文件和文件夹"
+
+    delete "${project.buildDir}/channelRoot"
+}
+
+/**
+ * 创建存档文件夹和对应的channelFile
+ */
+task makeArchiveDirs(dependsOn: ['assembleBaseRelease', 'assemble360Release', 'cleanChannelRootDir']) {
+    group = "Ray"
+    description = "创建channelRoot文件夹及包含的所有子文件夹以及对应的channelFile"
+
+    doFirst {
+        //make dir
+        def dir360 = "${project.buildDir}/channelRoot/360Dir"
+        def yingyongbaoDir = "${project.buildDir}/channelRoot/yingyongbaoDir"
+        def channelDir = "${project.buildDir}/channelRoot/channelDir"
+        def dirs = files(dir360, yingyongbaoDir, channelDir)
+
+        dirs.each { it.mkdirs() }
+        writeChannelFile(dir360, "360")//创建360渠道文件
+        writeChannelFile(yingyongbaoDir, "yingyongbao")//创建yingyongbao渠道文件
+        println "dir360，yingyongbaoDir，channelDir创建完成. =======================>>>>"
+    }
+}
+
+task loginTo360(type: JavaExec, dependsOn: 'makeArchiveDirs') {
+    group = "Ray"
+    description = "登录到360加固平台"
+
+    main = '-jar'
+    args = [
+            "${rootProject.rootDir}/jiagu/jiagu.jar",
+            "-login",
+            "18924225307",
+            "xiaoedai123"
+    ]
+}
+
+task importSignInfo(type: JavaExec, dependsOn: 'loginTo360') {
+    group = "Ray"
+    description = "导入app签名信息到360加固平台"
+
+    main = '-jar'
+    args = [
+            "${rootProject.rootDir}/jiagu/jiagu.jar",
+            "-importsign",
+            "${project.projectDir}/cashloan.jks",
+            "kalengo2go",
+            "cashloan",
+            "kalengo2go"
+    ]
+}
+
+/**
+ * 加固360包，因为360渠道包需要定制，所以需要先单独构建出来，然后从构建路径中加固，输出到360Dir
+ */
+task jiagu360Apk(type: JavaExec, dependsOn: 'importSignInfo') {
+    group = "Ray"
+    description = "加固360包，因为360渠道包需要定制，所以需要先单独构建出来，然后从构建路径中加固，输出到360Dir"
+
+    doFirst {
+        // 加固之前先确保要加固的apk有效，如果无效的话，360加固只会输出一段文本，而不会中断构建进程，
+        // 所以这里如果校验不通过则需要手动中断构建进程，进而确保360加固时的apk文件一定是有效的
+        if (!verifyApkValid("${project.buildDir}/outputs/apk/360/release/${getBaseApkName()}"))
+            throw new GradleException("jiagu360--->baseApk文件无效，请检查是否有对应的apk文件")
+    }
+    main = '-jar'
+    args = [
+            "${rootProject.rootDir}/jiagu/jiagu.jar",
+            "-jiagu",
+            "${project.buildDir}/outputs/apk/360/release/${getBaseApkName()}",//apk路径
+            "${project.buildDir}/channelRoot/360Dir",//输出路径
+            "-autosign"
+    ]
+    doLast {
+        renameApkName("${project.buildDir}/channelRoot/360Dir", getJiaGuApkName())
+        println "jiagu360Apk-->已成功重命名为：${getBaseApkName()}.  ===================>>>>"
+    }
+}
+
+/**
+ * 加固应用宝的包，输出到yingyongbaoDir
+ */
+task jiaguYingyongbaoApk(type: JavaExec, dependsOn: 'jiagu360Apk') {
+    group = "Ray"
+    description = "加固应用宝的包，输出到yingyongbaoDir"
+
+    doFirst {
+        // 加固之前先确保要加固的apk有效，如果无效的话，360加固只会输出一段文本，而不会中断构建进程，
+        // 所以这里如果校验不通过则需要手动中断构建进程，进而确保360加固时的apk文件一定是有效的
+        if (!verifyApkValid("${project.buildDir}/outputs/apk/base/release/${getBaseApkName()}"))
+            throw new GradleException("jiaguYingyongbao--->baseApk文件无效，请检查是否有对应的apk文件")
+    }
+    main = '-jar'
+    args = [
+            "${rootProject.rootDir}/jiagu/jiagu.jar",
+            "-jiagu",
+            "${project.buildDir}/outputs/apk/base/release/${getBaseApkName()}",//apk路径
+            "${project.buildDir}/channelRoot/yingyongbaoDir",//输出路径
+            "-autosign"
+    ]
+    doLast {
+        renameApkName("${project.buildDir}/channelRoot/yingyongbaoDir", getJiaGuApkName())
+        println "jiaguYingyongbaoApk-->已成功重命名为：${getBaseApkName()}.  ===================>>>>"
+    }
+}
+
+task add360ChannelAfterJiagu(type: RebuildApkChannelPackageTask, dependsOn: 'jiaguYingyongbaoApk') {
+    group = "Ray"
+    description = "在360渠道包加固完成后添加360渠道信息"
+
+    def extension = new RebuildChannelConfigurationExtension(project)
+    extension.baseReleaseApk = new File("${project.buildDir}/channelRoot/360Dir", getBaseApkName())
+    extension.releaseOutputDir = new File("${project.buildDir}/channelRoot/360Dir/channel")
+    extension.channelFile = new File("${project.buildDir}/channelRoot/360Dir", "channelFile.txt")
+
+    mRebuildChannelExtension = extension
+}
+
+task addYingyongbaoChannelAfterJiagu(type: RebuildApkChannelPackageTask, dependsOn: 'add360ChannelAfterJiagu') {
+    group = "Ray"
+    description = "在应用宝渠道包加固完成后添加yingyongbao渠道信息"
+
+    def extension = new RebuildChannelConfigurationExtension(project)
+    extension.baseReleaseApk = new File("${project.buildDir}/channelRoot/yingyongbaoDir", getBaseApkName())
+    extension.releaseOutputDir = new File("${project.buildDir}/channelRoot/yingyongbaoDir/channel")
+    extension.channelFile = new File("${project.buildDir}/channelRoot/yingyongbaoDir", "channelFile.txt")
+    mRebuildChannelExtension = extension
+}
+
+/**
+ * 为普通包添加渠道信息
+ */
+task addBaseChannel(type: RebuildApkChannelPackageTask, dependsOn: 'addYingyongbaoChannelAfterJiagu') {
+    group = "Ray"
+    description = "为所有正常的普通包添加渠道信息，渠道信息在项目根目录的channelFile.txt中"
+
+    def extension = new RebuildChannelConfigurationExtension(project)
+    extension.baseReleaseApk = new File("${project.buildDir}/outputs/apk/base/release", getBaseApkName())
+    extension.releaseOutputDir = new File("${project.buildDir}/channelRoot/channelDir")
+    extension.channelFile = new File("${rootProject.rootDir}", "channelFile.txt")
+    mRebuildChannelExtension = extension
+}
+
+/**
+ * 为360包添加完渠道后，就直接上传到七牛云，因为后续的渠道包输出会删除已有文件夹，导致之前的渠道包丢失
+ */
+task upload360ChannelApkToQiniu(type: QiNiuUploadTask, dependsOn: 'addBaseChannel') {
+    group = "Ray"
+    description = "上传360渠道包到七牛云"
+
+    bucketName getBacketName()
+    fileDir "${project.buildDir}/channelRoot/360Dir/channel"
+    doLast {
+        println "360渠道包已上传到七牛云的:${bucketName}目录.  ===================>>>>"
+    }
+}
+
+/**
+ * 为Yingyongbao包添加完渠道后，就直接上传到七牛云，因为后续的渠道包输出会删除已有文件夹，导致之前的渠道包丢失
+ */
+task uploadYingyongbaoChannelApkToQiniu(type: QiNiuUploadTask, dependsOn: 'upload360ChannelApkToQiniu') {
+    group = "Ray"
+    description = "上传yingyongbao渠道包到七牛云"
+
+    bucketName getBacketName()
+    fileDir "${project.buildDir}/channelRoot/yingyongbaoDir/channel"
+    doLast {
+        println "Yingyongbao渠道包已上传到七牛云的:${bucketName}目录.  ===================>>>>"
+    }
+}
+
+/**
+ * 所有渠道包都构建完毕后，上传到七牛云
+ */
+task uploadChannelApksToQiniu(type: QiNiuUploadTask, dependsOn: 'uploadYingyongbaoChannelApkToQiniu') {
+    group = "Ray"
+    description = "上传所有其他渠道包到七牛云"
+
+    bucketName getBacketName()
+    fileDir "${project.buildDir}/channelRoot/channelDir"
+    doLast {
+        println "渠道包已构建完毕并上传到七牛云的:${bucketName}目录.  ===================>>>>"
+    }
+}
+
+buildscript {
+
+    repositories {
+        jcenter()
+        google()
+    }
+    dependencies {
+        classpath "com.android.tools.build:gradle:${rootProject.ext.gradle_version}"
+        classpath 'com.leon.channel:plugin:2.0.1'
+    }
+}
