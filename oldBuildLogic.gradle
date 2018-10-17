@@ -1,0 +1,147 @@
+//import org.gradle.internal.os.OperatingSystem //用于判断是哪种类型的操作系统
+
+//发布版本时，上传apk文件，然后拷贝&移动apk到共享盘-------开始-------------
+/**
+ * 拷贝文件到market共享盘
+ */
+task copyApk2MarketDisk(type: Copy, dependsOn: 'makeDirs') {
+
+    group = "Ray"
+    description = "copy apk files to market disk."
+
+    def tempFlavorName = null
+    android.applicationVariants.all { variant ->
+        if (tempFlavorName != variant.flavorName) {
+            from("$buildDir/outputs/apk/$variant.flavorName/release/") {
+                include "*.apk"
+            }
+            into "/Volumes/Finance/现金贷项目all/现金贷-市场运营组/市场推广/13个渠道包汇总/" + project.android.defaultConfig.versionName
+            tempFlavorName = variant.flavorName
+        }
+    }
+
+    doLast {
+        println "copyApk2MarketDisk task run finished  ===================>>>>"
+    }
+}
+
+/**
+ * 拷贝文件到dev共享盘
+ */
+task copyMapping2DevDisk(type: Copy, dependsOn: 'copyApk2MarketDisk') {
+
+    group = "Ray"
+    description = "copy apk and mapping files to dev disk."
+
+    def archiveFlavorName = "guanwang" //for archive
+
+    from("$buildDir/outputs/mapping/$archiveFlavorName/release/") {
+        include "mapping.txt"
+    }
+    from("$buildDir/outputs/apk/$archiveFlavorName/release/") {
+        include "*.apk"
+    }
+    into "/Volumes/Dev/Ray/sophix热修复apk存档/" + project.android.defaultConfig.versionName + "/oldApkAndMapping"
+
+    doLast {
+        println "copyMapping2DevDisk run finished  ===================>>>>"
+    }
+}
+
+/**
+ * 刷新共享盘网络，因为现在共享盘的网络极不稳定，可能会导致拷贝到共享盘的task执行超时or失败
+ */
+task flushNetworkStatus(type: Exec) {
+    group = "Ray"
+    description = "upload apk files to qiniu Cloud."
+
+    commandLine "sh", "../ping192.168.1.130.sh"
+
+    doLast {
+        println "flushNetworkStatus task run finished  ===================>>>>"
+    }
+}
+
+/**
+ * 创建文件夹，用于存放apk和mapping，以及预留空文件夹用于将来存放patch和newApk
+ */
+task makeDirs() {
+
+    group = "Ray"
+    description = "create dirs in dev disk."
+
+    def destDevDirBase = "/Volumes/Dev/Ray/sophix热修复apk存档/"
+    def destDevDirOld = "/oldApkAndMapping/"
+    def destDevDirNew = "/newApk/"
+    def destDevDirPatch = "/patch/"
+
+    doLast {
+        def devDirOld = destDevDirBase + android.defaultConfig.versionName + destDevDirOld
+        def devDirNew = destDevDirBase + android.defaultConfig.versionName + destDevDirNew
+        def devDirPatch = destDevDirBase + android.defaultConfig.versionName + destDevDirPatch
+
+        def dirs = files(devDirNew, devDirOld, devDirPatch)
+
+        dirs.each { it.mkdirs() }
+
+        println "makeDirs task run finished  ===================>>>>"
+    }
+}
+
+/**
+ * 每次打完包时，执行这个命令即可，复制-> 移动 -> 上传
+ */
+task CopyMoveUpload(dependsOn: ['copyMapping2DevDisk']) {
+    group = "Ray"
+    description = "combination tasks ,for release build."
+
+    doLast {
+        println "all tasks execute success.  ===================>>>>"
+    }
+}
+
+/**
+ * 上传到七牛云的 cashloan-apk bucket下
+ */
+task upload2QiniuVersionBucket(type: com.digitalcloud.cashloan.plugin.task.QiNiuUploadTask) {
+    bucketName "cashloan-apk"
+    fileDir "${buildDir.absolutePath}${File.separator}outputs${File.separator}apk"
+}
+
+//发布版本时，上传apk文件，然后拷贝&移动apk到共享盘-------结束-------------
+
+//用于Jenkins构建------开始-------------
+project.afterEvaluate {
+    try {
+        QiNiuUploadTask.mustRunAfter assembleGuanwangRelease
+    } catch (Exception ignore) {
+    }
+}
+
+task executeUpload() {
+    group = "Ray"
+    description = "jenkins，上传七牛."
+    dependsOn = ['assembleGuanwangRelease', 'QiNiuUploadTask']
+}
+//用于Jenkins构建------结束-------------
+
+//用于运营推广同事动态构建渠道包------开始-------------
+/**
+ *
+ * 用于运营同事构建渠道包，步骤：
+ * 1。在jenkins中填写渠道信息，用英文逗号','分隔
+ * 2。 使用shell脚本获取jenkins中的渠道信息，格式化好之后替换掉channel.properties中的内容
+ * 3。然后执行`gradlew assembleRelease`进行构建
+ * 4。上传渠道包到七牛云（需要重写七牛云的一些逻辑）
+ *
+ * 上传渠道包到七牛云"cashloan-channel-promotion" bucket下
+ */
+task upload2QiniuChannelBucket(type: com.digitalcloud.cashloan.plugin.task.QiNiuUploadTask, dependsOn: ['assembleRelease']) {
+    bucketName "cashloan-channel-promotion"
+    fileDir "${buildDir.absolutePath}${File.separator}outputs${File.separator}apk"
+    doLast {
+        println "渠道包已构建完毕并上传到七牛云:${bucketName}目录.  ===================>>>>"
+    }
+}
+
+//用于运营推广同事动态构建渠道包------结束-------------
